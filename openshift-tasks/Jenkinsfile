@@ -67,14 +67,15 @@ podTemplate(
       stage('Publish to Nexus') {
         echo "Publish to Nexus"
 
-        // TBD: Publish to Nexus
+        sh "${mvnCmd} deploy -DskipTests=true -DaltDeploymentRepository=nexus::default::http://nexus3.gpte-hw-cicd.svc.cluster.local:8081/repository/releases/"
       }
 
       // Build the OpenShift Image in OpenShift and tag it.
       stage('Build and Tag OpenShift Image') {
         echo "Building OpenShift container image tasks:${devTag}"
 
-        // TBD: Build Image, tag Image
+        sh "oc start-build tasks --follow --from-file=http://nexus3.gpte-hw-cicd.svc.cluster.local:8081/repository/releases/org/jboss/quickstarts/eap/tasks/${version}/tasks-${version}.war -n e80d-tasks-dev"
+        openshiftTag alias: 'false', destStream: 'tasks', destTag: devTag, destinationNamespace: 'e80d-tasks-dev', namespace: 'e80d-tasks-dev', srcStream: 'tasks', srcTag: 'latest', verbose: 'false'
       }
 
       // Deploy the built image to the Development Environment.
