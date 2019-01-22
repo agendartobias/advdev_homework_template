@@ -33,9 +33,9 @@ podTemplate(
       def version = getVersionFromPom("pom.xml")
 
       // TBD Set the tag for the development image: version + build number
-      def devTag  = ""
+      def devTag  = "${version}-${BUILD_NUMBER}"
       // Set the tag for the production image: version
-      def prodTag = ""
+      def prodTag = "${version}"
 
       // Using Maven build the war file
       // Do not run tests in this step
@@ -82,18 +82,25 @@ podTemplate(
       stage('Deploy to Dev') {
         echo "Deploying container image to Development Project"
 
-        // TBD: Deploy to development Project
-        //      Set Image, Set VERSION
-        //      Make sure the application is running and ready before proceeding
+	sh "oc set env  dc/tasks VERSION='${devTag} (tasks-dev)' -n e80d-tasks-dev"
+        sh "oc set image dc/tasks tasks=docker-registry.default.svc:5000/e80d-tasks-dev/tasks:${devTag} -n e80d-tasks-dev"
+
+        openshiftDeploy depCfg: 'tasks', namespace: 'e80d-tasks-dev', verbose: 'false', waitTime: '', waitUnit: 'sec'
+        openshiftVerifyDeployment depCfg: 'tasks', namespace: 'e80d-tasks-dev', replicaCount: '1', verbose: 'false', verifyReplicaCount: 'false', waitTime: '', waitUnit: 'sec'
+        openshiftVerifyService namespace: 'e80d-tasks-dev', svcName: 'tasks', verbose: 'false'
+
+	sh "curl -s -i -H 'Content-Length: 0' -X POST http://tasks-e80d-tasks-dev.apps.na311.openshift.opentlc.com/ws/tasks/integration_test_1"
       }
 
       // Copy Image to Nexus container registry
       stage('Copy Image to Nexus container registry') {
         echo "Copy image to Nexus container registry"
 
-        // TBD: Copy image to Nexus container registry
+        sh "skopeo copy --src-tls-verify=false --dest-tls-verify=false --src-creds openshift:\$(oc whoami -t) --dest-creds admin:redhat \
+	docker://docker-registry.default.svc:5000/e80d-tasks-dev/tasks:${devTag} \
+	docker://nexus-registry.gpte-hw-cicd.svc.cluster.local:5000/tasks:${devTag}"
 
-        // TBD: Tag the built image with the production tag.
+	openshiftTag alias: 'false', destStream: 'tasks', destTag: prodTag, destinationNamespace: 'e80d-tasks-dev', namespace: 'e80d-tasks-dev', srcStream: 'tasks', srcTag: devTag, verbose: 'false'
       }
 
       // Blue/Green Deployment into Production
@@ -102,15 +109,28 @@ podTemplate(
       def activeApp = ""
 
       stage('Blue/Green Production Deployment') {
-        // TBD: Determine which application is active
-        //      Set Image, Set VERSION
-        //      Deploy into the other application
-        //      Make sure the application is running and ready before proceeding
+        activeApp = sh(returnStdout: true, script: "oc get route tasks -n e80d-tasks-prod -o jsonpath='{ .spec.to.name }'").trim()
+        if (activeApp == "tasks-green") {
+          destApp = "tasks-blue"
+        }
+        echo "Active Application:      " + activeApp
+        echo "Destination Application: " + destApp
+
+        sh "oc set env dc/tasks-blue VERSION='${prodTag} (tasks-blue)' -n e80d-tasks-prod"
+        sh "oc set env dc/tasks-green VERSION='${prodTag} (tasks-green)' -n e80d-tasks-prod"
+        sh "oc set image dc/${destApp} ${destApp}=docker-registry.default.svc:5000/e80d-tasks-dev/tasks:${prodTag} -n e80d-tasks-prod"
+
+        openshiftDeploy depCfg: destApp, namespace: 'e80d-tasks-prod', verbose: 'false', waitTime: '', waitUnit: 'sec'
+        openshiftVerifyDeployment depCfg: destApp, namespace: 'e80d-tasks-prod', replicaCount: '1', verbose: 'false', verifyReplicaCount: 'true', waitTime: '', waitUnit: 'sec'
+        openshiftVerifyService namespace: 'e80d-tasks-prod', svcName: destApp, verbose: 'false'
+
+        sh "curl -s -i -H 'Content-Length: 0' -X POST http://tasks-e80d-tasks-prod.apps.na311.openshift.opentlc.com/ws/tasks/integration_test_1"
+
       }
 
       stage('Switch over to new Version') {
         echo "Switching Production application to ${destApp}."
-        // TBD: Execute switch
+        sh 'oc patch route tasks -n e80d-tasks-prod -p \'{"spec":{"to":{"name":"' + destApp + '"}}}\''
       }
     }
   }
